@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pdfplumber
 from pdf2image import convert_from_bytes
@@ -11,6 +10,7 @@ import pandas as pd
 from openai import OpenAI
 from dotenv import load_dotenv
 import spacy
+import tiktoken
 
 # Load environment variables
 load_dotenv()
@@ -36,9 +36,9 @@ def extract_text(file):
     if file.name.endswith('.pdf'):
         try:
             with pdfplumber.open(io.BytesIO(content)) as pdf:
-                text = '\n'.join([page.extract_text() for page in pdf.pages])
+                text = '\n'.join([page.extract_text() for page in pdf.pages if page.extract_text()])
             
-            if not text.strip():
+            if not text.strip():  # Use OCR if no text is found
                 images = convert_from_bytes(content)
                 text = '\n'.join([pytesseract.image_to_string(img) for img in images])
                 
@@ -63,34 +63,48 @@ def extract_text(file):
     
     return text
 
+def truncate_text(text, max_tokens=3500):
+    """Truncate text to fit within the token limit for OpenAI API."""
+    encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    tokens = encoding.encode(text)
+
+    if len(tokens) > max_tokens:
+        tokens = tokens[:max_tokens]  # Keep only allowed tokens
+        text = encoding.decode(tokens)
+
+    return text
+
 def openai_call(prompt):
-    """Make request to OpenRouter API"""
+    """Make request to OpenRouter API with token-aware truncation"""
     try:
+        truncated_prompt = truncate_text(prompt)  # Ensure it fits within limits
+
         response = client.chat.completions.create(
             model="openai/gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": truncated_prompt}],
             temperature=0.3,
             max_tokens=1024
         )
-        return response.choices[0].message.content
+
+        if response and response.choices and response.choices[0].message:
+            return response.choices[0].message.content
+        else:
+            return "No response generated."
+
     except Exception as e:
         st.error(f"API Error: {str(e)}")
         return None
 
-# ... [Keep the rest of the code identical to previous version] ...
+def chunk_text(text, chunk_size=3000):
+    """Break text into smaller chunks to fit OpenAI token limits."""
+    words = text.split()
+    return [" ".join(words[i:i+chunk_size]) for i in range(0, len(words), chunk_size)]
 
 def extract_entities(text):
-    """Extract named entities using spaCy"""
+    """Extract named entities using spaCy (optimized without start/end)."""
     doc = nlp(text)
-    entities = []
-    for ent in doc.ents:
-        entities.append({
-            "Text": ent.text,
-            "Label": ent.label_,
-            "Start": ent.start_char,
-            "End": ent.end_char
-        })
-    return entities
+    return [{"Text": ent.text, "Label": ent.label_} for ent in doc.ents]
+
 
 def compare_documents(text1, text2):
     """Compare two documents and highlight differences"""
@@ -109,11 +123,10 @@ def compare_documents(text1, text2):
 
 # Streamlit UI
 st.set_page_config(page_title="Doc Analyzer Pro", layout="wide")
-st.title("📄 Smart Document Analyzer (OpenRouter)")
+st.title("📄 Smart Document Analyzer")
 
 # File Upload Section
-uploaded_file = st.file_uploader("Upload document (PDF/DOCX/TXT)", 
-                               type=["pdf", "docx", "txt"])
+uploaded_file = st.file_uploader("Upload document (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
 
 if uploaded_file:
     with st.spinner("Processing document..."):
@@ -138,10 +151,15 @@ if 'document_text' in st.session_state:
     if analysis_type == "Summary":
         st.subheader("Document Summarization")
         length = st.radio("Summary Length", ["Concise", "Detailed", "Comprehensive"], index=1)
-        
+
         if st.button("Generate Summary"):
             with st.spinner("Generating summary..."):
-                summary = openai_call(f"Summarize this document with {length.lower()} detail:\n{text}")
+                chunks = chunk_text(text)  # Break text into manageable parts
+                summaries = [openai_call(f"Summarize this with {length.lower()} detail:\n{chunk}") for chunk in chunks]
+
+                # Combine summaries if multiple chunks were processed
+                summary = "\n".join(filter(None, summaries)) 
+
                 if summary:
                     st.subheader("Summary")
                     st.write(summary)
@@ -175,8 +193,7 @@ if 'document_text' in st.session_state:
 
     elif analysis_type == "Document Comparison":
         st.subheader("Document Comparison")
-        compare_file = st.file_uploader("Upload second document (PDF)", 
-                                      type=["pdf"])
+        compare_file = st.file_uploader("Upload second document (PDF)", type=["pdf"])
         
         if compare_file:
             with st.spinner("Processing second document..."):

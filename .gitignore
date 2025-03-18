@@ -1,0 +1,32 @@
+# Ignore environment variables
+.env
+
+
+# Ignore system files
+.DS_Store  # macOS system file
+Thumbs.db  # Windows system file
+
+# Ignore Python cache and virtual environment files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Ignore IDE/editor-specific files
+.vscode/
+.idea/
+*.swp  # Vim swap files
+
+# Ignore virtual environments (if using venv)
+venv/
+env/
+
+# Ignore Streamlit cache (if any)
+.streamlit/
+
+# Ignore large files (like models, datasets, logs)
+*.pkl  # Model files
+*.h5   # Keras/TensorFlow model files
+*.csv  # Large dataset files (optional)
+*.db   # Database files
